@@ -11,19 +11,23 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// DB Connection
-const db = mysql.createConnection({
+// DB Connection Pool (prevents "connection closed" errors on Render)
+const db = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME
+  database: process.env.DB_NAME,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
 });
 
-db.connect((err) => {
+// Verify pool connectivity on startup
+db.query("SELECT 1", (err) => {
   if (err) {
     console.log("Database connection failed ❌", err);
   } else {
-    console.log("Connected to MySQL ✅");
+    console.log("Connected to MySQL (pool) ✅");
   }
 });
 
@@ -412,7 +416,8 @@ app.get("/ai-recommend/:userId", (req, res) => {
             console.log("AI RESPONSE:", result);
 
             // Try ML service for better ranking, but use filtered result as guaranteed fallback
-            axios.get(`http://localhost:5002/recommend?user_id=${userId}`)
+            const ML_URL = process.env.ML_SERVICE_URL || "http://localhost:5002";
+            axios.get(`${ML_URL}/recommend?user_id=${userId}`)
             .then(response => {
             const aiResult = Array.isArray(response.data) ? response.data : [];
             if (aiResult.length > 0) {
