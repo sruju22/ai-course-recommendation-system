@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { User, Lock, BookOpen, AlertCircle, Loader2 } from "lucide-react";
+import { API_URL } from "./config";
 
 function Login({ setUser }) {
   const [username, setUsername] = useState("");
@@ -11,7 +12,7 @@ function Login({ setUser }) {
     setError("");
     setLoading(true);
 
-    fetch("http://localhost:5001/login", {
+    fetch(API_URL + "/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),

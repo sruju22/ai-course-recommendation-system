@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { API_URL } from "./config";
 import Login from "./login";
 import Signup from "./Signup";
 import { useMemo } from "react";
@@ -114,7 +115,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
 
   // ✅ FETCH COURSES
   useEffect(() => {
-    fetch("http://localhost:5001/courses")
+    fetch(API_URL + "/courses")
       .then(res => res.json())
       .then(data => setCourses(data))
       .catch(err => console.error(err));
@@ -124,7 +125,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
   const handleAddCourse = () => {
     setLoading(true);
 
-    fetch("http://localhost:5001/add-course", {
+    fetch(API_URL + "/add-course", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -141,7 +142,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
         setCategory("");
 
         // 🔥 REFRESH COURSES
-        fetch("http://localhost:5001/courses")
+        fetch(API_URL + "/courses")
           .then(res => res.json())
           .then(data => setCourses(data));
       });
@@ -173,7 +174,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
           </button>
 
           <button
-            onClick={() => { setActiveTab("users"); fetch("http://localhost:5001/users").then(r => r.json()).then(d => setAllUsers(d)); }}
+            onClick={() => { setActiveTab("users"); fetch(API_URL + "/users").then(r => r.json()).then(d => setAllUsers(d)); }}
             className={`flex items-center gap-3 w-full text-left px-4 py-3 rounded-xl font-medium transition-colors ${activeTab === "users" || activeTab === "userdetails" ? "bg-indigo-50 text-indigo-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
               }`}
           >
@@ -315,7 +316,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
                     <button
                       onClick={() => {
                         setDetailsLoading(true);
-                        fetch(`http://localhost:5001/user/${u.id}/details`)
+                        fetch(`${API_URL}/user/${u.id}/details`)
                           .then(r => r.json())
                           .then(d => { setUserDetails(d); setSelectedUser(u); setActiveTab("userdetails"); setDetailsLoading(false); })
                           .catch(() => setDetailsLoading(false));
@@ -425,14 +426,14 @@ function CoursePage({ course, user, onBack, onTakeQuiz }) {
   const [marking, setMarking] = useState(false);
 
   useEffect(() => {
-    fetch(`http://localhost:5001/lessons/${course.id}`)
+    fetch(`${API_URL}/lessons/${course.id}`)
       .then(res => res.json())
       .then(data => {
         setLessons(data);
         if (data.length > 0) setActiveLesson(data[0]);
       });
 
-    fetch(`http://localhost:5001/progress/${user.id}/${course.id}`)
+    fetch(`${API_URL}/progress/${user.id}/${course.id}`)
       .then(res => res.json())
       .then(data => {
         setProgressData(data.progressData || []);
@@ -453,7 +454,7 @@ function CoursePage({ course, user, onBack, onTakeQuiz }) {
     if (progressData.some(p => p.lesson_id === lessonId && Number(p.completed) === 1)) return; // prevent duplicate call
 
     setMarking(true);
-    fetch("http://localhost:5001/progress", {
+    fetch(API_URL + "/progress", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ user_id: user.id, course_id: course.id, lesson_id: lessonId }),
@@ -615,7 +616,7 @@ function QuizPage({ course, user, onBack }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`http://localhost:5001/quiz/${course.id}`)
+    fetch(`${API_URL}/quiz/${course.id}`)
       .then(res => res.json())
       .then(data => { setQuestions(data); setLoading(false); });
   }, [course.id]);
@@ -638,7 +639,7 @@ function QuizPage({ course, user, onBack }) {
       questionId: parseInt(questionId),
       selected,
     }));
-    fetch("http://localhost:5001/quiz/submit", {
+    fetch(API_URL + "/quiz/submit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ userId: user.id, courseId: course.id, answers: payload }),
@@ -758,7 +759,7 @@ function CourseCard({ course, user, onStart }) {
 
   useEffect(() => {
     // Use ONLY backend response - single source of truth
-    fetch(`http://localhost:5001/progress/${user.id}/${course.id}`)
+    fetch(`${API_URL}/progress/${user.id}/${course.id}`)
       .then(res => res.json())
       .then(data => {
         setProgress(data.completed || 0);
@@ -819,7 +820,7 @@ function AiRecommendationsPage({ user, onBack, onStartCourse }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`http://localhost:5001/ai-recommend/${user.id}`)
+    fetch(`${API_URL}/ai-recommend/${user.id}`)
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) setRecommended(data);
@@ -931,12 +932,12 @@ function UserDashboard({ user, onLogout }) {
   const [activeView, setActiveView] = useState("dashboard"); // dashboard | course | quiz | ai
 
   useEffect(() => {
-    fetch("http://localhost:5001/courses")
+    fetch(API_URL + "/courses")
       .then(res => res.json())
       .then(data => setCourses(data));
 
     if (activeView === "dashboard") {
-      fetch(`http://localhost:5001/dashboard-stats/${user.id}`)
+      fetch(`${API_URL}/dashboard-stats/${user.id}`)
         .then(res => res.json())
         .then(data => setStats(data));
     }
