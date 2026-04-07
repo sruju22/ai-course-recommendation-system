@@ -2,7 +2,7 @@ require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
-const mysql = require("mysql2");
+const sqlite3 = require("sqlite3").verbose();
 const axios = require("axios");
 
 const app = express();
@@ -11,25 +11,93 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// DB Connection Pool (prevents "connection closed" errors on Render)
-const db = mysql.createPool({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0
-});
-
-// Verify pool connectivity on startup
-db.query("SELECT 1", (err) => {
+// SQLite Database
+const db = new sqlite3.Database("./database.db", (err) => {
   if (err) {
     console.log("Database connection failed ❌", err);
   } else {
-    console.log("Connected to MySQL (pool) ✅");
+    console.log("Connected to SQLite ✅");
   }
 });
+
+// Enable WAL mode for better concurrency
+db.run("PRAGMA journal_mode=WAL");
+db.run("PRAGMA foreign_keys=ON");
+
+// Create tables if not exist
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL,
+      email TEXT,
+      password TEXT NOT NULL,
+      role TEXT DEFAULT 'user'
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS courses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      description TEXT,
+      category TEXT
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS lessons (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      course_id INTEGER,
+      title TEXT,
+      content TEXT,
+      video_url TEXT,
+      FOREIGN KEY (course_id) REFERENCES courses(id)
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS progress (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      course_id INTEGER,
+      lesson_id INTEGER,
+      completed INTEGER DEFAULT 0,
+      UNIQUE(user_id, course_id, lesson_id),
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (course_id) REFERENCES courses(id),
+      FOREIGN KEY (lesson_id) REFERENCES lessons(id)
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS quiz (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      course_id INTEGER,
+      question TEXT,
+      option1 TEXT,
+      option2 TEXT,
+      option3 TEXT,
+      option4 TEXT,
+      answer TEXT,
+      FOREIGN KEY (course_id) REFERENCES courses(id)
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS quiz_result (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      course_id INTEGER,
+      score INTEGER,
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (course_id) REFERENCES courses(id)
+    )
+  `);
+
+  console.log("All tables ready ✅");
+});
+
 
 // Test route
 app.get("/", (req, res) => {
@@ -39,13 +107,9 @@ app.get("/", (req, res) => {
 
 // 📚 Get Courses
 app.get("/courses", (req, res) => {
-  const sql = "SELECT * FROM courses";
-
-  db.query(sql, (err, result) => {
-    if (err) {
-      return res.status(500).json(err);
-    }
-    res.json(result);
+  db.all("SELECT * FROM courses", [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
   });
 });
 
@@ -59,13 +123,11 @@ app.post("/login", (req, res) => {
 
   const sql = "SELECT * FROM users WHERE username = ? AND password = ?";
 
-  db.query(sql, [username, password], (err, result) => {
-    if (err) {
-      return res.status(500).json(err);
-    }
+  db.get(sql, [username, password], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
 
-    if (result.length > 0) {
-      res.json(result[0]); // send user
+    if (row) {
+      res.json(row); // send user
     } else {
       res.status(401).json({ message: "Invalid credentials ❌" });
     }
@@ -73,13 +135,13 @@ app.post("/login", (req, res) => {
 });
 
 
-// 📝 Register (FIXED)
+// 📝 Register
 app.post("/register", (req, res) => {
   const { username, email, password, role } = req.body;
 
   const sql = "INSERT INTO users (username, email, password, role) VALUES (?, ?, ?, ?)";
 
-  db.query(sql, [username, email, password, role], (err, result) => {
+  db.run(sql, [username, email, password, role], function (err) {
     if (err) {
       console.log(err);
       return res.status(500).json({ message: "Error registering user ❌" });
@@ -89,7 +151,7 @@ app.post("/register", (req, res) => {
       success: true,
       message: "User registered successfully ✅",
       user: {
-        id: result.insertId,
+        id: this.lastID,
         username,
         email,
         role
@@ -105,10 +167,8 @@ app.post("/add-course", (req, res) => {
 
   const sql = "INSERT INTO courses (title, description, category) VALUES (?, ?, ?)";
 
-  db.query(sql, [title, description, category], (err) => {
-    if (err) {
-      return res.status(500).json({ message: "Error adding course ❌" });
-    }
+  db.run(sql, [title, description, category], function (err) {
+    if (err) return res.status(500).json({ message: "Error adding course ❌" });
     res.json({ message: "Course added successfully ✅" });
   });
 });
@@ -117,9 +177,9 @@ app.post("/add-course", (req, res) => {
 app.get("/lessons/:courseId", (req, res) => {
   const { courseId } = req.params;
   const sql = "SELECT * FROM lessons WHERE course_id = ? ORDER BY id ASC";
-  db.query(sql, [courseId], (err, result) => {
-    if (err) return res.status(500).json(err);
-    res.json(result);
+  db.all(sql, [courseId], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
   });
 });
 
@@ -128,9 +188,9 @@ app.get("/lessons/:courseId", (req, res) => {
 app.get("/quiz/:courseId", (req, res) => {
   const { courseId } = req.params;
   const sql = "SELECT * FROM quiz WHERE course_id = ? ORDER BY id ASC";
-  db.query(sql, [courseId], (err, result) => {
-    if (err) return res.status(500).json(err);
-    res.json(result);
+  db.all(sql, [courseId], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
   });
 });
 
@@ -143,10 +203,10 @@ app.post("/progress", (req, res) => {
   const sql = `
     INSERT INTO progress (user_id, course_id, lesson_id, completed)
     VALUES (?, ?, ?, 1)
-    ON DUPLICATE KEY UPDATE completed = 1
+    ON CONFLICT(user_id, course_id, lesson_id) DO UPDATE SET completed = 1
   `;
-  db.query(sql, [user_id, course_id, lesson_id], (err) => {
-    if (err) return res.status(500).json(err);
+  db.run(sql, [user_id, course_id, lesson_id], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
     console.log("✅ Progress saved for lesson", lesson_id);
     res.json({ message: "Progress saved ✅" });
   });
@@ -169,17 +229,17 @@ app.get("/progress/:userId/:courseId", (req, res) => {
   // Also fetch raw progress data for frontend
   const dataSql = "SELECT lesson_id, MAX(completed) as completed FROM progress WHERE user_id = ? AND course_id = ? GROUP BY lesson_id";
 
-  db.query(completedSql, [userId, courseId], (err, compRows) => {
-    if (err) return res.status(500).json(err);
+  db.get(completedSql, [userId, courseId], (err, compRow) => {
+    if (err) return res.status(500).json({ error: err.message });
 
-    db.query(totalSql, [courseId], (err2, totalRows) => {
-      if (err2) return res.status(500).json(err2);
+    db.get(totalSql, [courseId], (err2, totalRow) => {
+      if (err2) return res.status(500).json({ error: err2.message });
 
-      db.query(dataSql, [userId, courseId], (err3, dataRows) => {
-        if (err3) return res.status(500).json(err3);
+      db.all(dataSql, [userId, courseId], (err3, dataRows) => {
+        if (err3) return res.status(500).json({ error: err3.message });
 
-        const completed = parseInt(compRows[0].completedLessons) || 0;
-        const totalLessons = parseInt(totalRows[0].totalLessons) || 0;
+        const completed = parseInt(compRow.completedLessons) || 0;
+        const totalLessons = parseInt(totalRow.totalLessons) || 0;
 
         const progress = totalLessons === 0
           ? 0
@@ -204,8 +264,8 @@ app.post("/quiz/submit", (req, res) => {
   const { userId, courseId, answers } = req.body;
   // answers = [{ questionId, selected }]
   const sql = "SELECT id, answer FROM quiz WHERE course_id = ?";
-  db.query(sql, [courseId], (err, questions) => {
-    if (err) return res.status(500).json(err);
+  db.all(sql, [courseId], (err, questions) => {
+    if (err) return res.status(500).json({ error: err.message });
     let score = 0;
     questions.forEach(q => {
       const submitted = answers.find(a => a.questionId === q.id);
@@ -214,13 +274,13 @@ app.post("/quiz/submit", (req, res) => {
 
     if (userId) {
       const checkSql = "SELECT id FROM quiz_result WHERE user_id = ? AND course_id = ?";
-      db.query(checkSql, [userId, courseId], (err2, rows) => {
-        if (err2) return res.status(500).json(err2);
-        if (rows.length > 0) {
+      db.get(checkSql, [userId, courseId], (err2, row) => {
+        if (err2) return res.status(500).json({ error: err2.message });
+        if (row) {
           return res.json({ score, total: questions.length, message: "Already submitted" });
         }
         const saveSql = "INSERT INTO quiz_result (user_id, course_id, score) VALUES (?, ?, ?)";
-        db.query(saveSql, [userId, courseId, score], () => {
+        db.run(saveSql, [userId, courseId, score], function () {
           res.json({ score, total: questions.length });
         });
       });
@@ -243,16 +303,16 @@ app.get("/dashboard-stats/:userId", (req, res) => {
   // Total lessons across enrolled courses
   const totalEnrolledLessonsSql = "SELECT COUNT(*) as total_lessons FROM lessons WHERE course_id IN (SELECT DISTINCT course_id FROM progress WHERE user_id = ?)";
 
-  db.query(completedSql, [userId], (err, res1) => {
-    if (err) return res.status(500).json(err);
-    db.query(enrolledSql, [userId], (err, res2) => {
-      if (err) return res.status(500).json(err);
-      db.query(totalEnrolledLessonsSql, [userId], (err, res3) => {
-        if (err) return res.status(500).json(err);
+  db.get(completedSql, [userId], (err, row1) => {
+    if (err) return res.status(500).json({ error: err.message });
+    db.get(enrolledSql, [userId], (err2, row2) => {
+      if (err2) return res.status(500).json({ error: err2.message });
+      db.get(totalEnrolledLessonsSql, [userId], (err3, row3) => {
+        if (err3) return res.status(500).json({ error: err3.message });
 
-        const completed = parseInt(res1[0].completed_count) || 0;
-        const enrolled = parseInt(res2[0].enrolled_count) || 0;
-        const totalLessons = parseInt(res3[0].total_lessons) || 0;
+        const completed = parseInt(row1.completed_count) || 0;
+        const enrolled = parseInt(row2.enrolled_count) || 0;
+        const totalLessons = parseInt(row3.total_lessons) || 0;
 
         const progressPercent = totalLessons === 0
           ? 0
@@ -265,9 +325,9 @@ app.get("/dashboard-stats/:userId", (req, res) => {
         console.log("📊 Stats → completed:", completed, "enrolled:", enrolled, "totalLessons:", totalLessons, "avgProgress:", avgProgress + "%");
 
         const lastCourseSql = "SELECT course_id FROM progress WHERE user_id = ? ORDER BY id DESC LIMIT 1";
-        db.query(lastCourseSql, [userId], (err, res4) => {
-          if (err) return res.status(500).json(err);
-          const lastCourseId = res4.length > 0 ? res4[0].course_id : null;
+        db.get(lastCourseSql, [userId], (err4, row4) => {
+          if (err4) return res.status(500).json({ error: err4.message });
+          const lastCourseId = row4 ? row4.course_id : null;
 
           const response = {
             totalCompleted: completed,
@@ -286,9 +346,9 @@ app.get("/dashboard-stats/:userId", (req, res) => {
 
 // 👥 Get All Users (exclude admin)
 app.get("/users", (req, res) => {
-  db.query("SELECT id, username AS name, email FROM users WHERE role != 'admin' OR role IS NULL", (err, result) => {
-    if (err) return res.status(500).json(err);
-    res.json(result);
+  db.all("SELECT id, username AS name, email FROM users WHERE role != 'admin' OR role IS NULL", [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
   });
 });
 
@@ -297,13 +357,11 @@ app.get("/user/:id/details", (req, res) => {
   const userId = req.params.id;
   console.log("USER DETAILS - userId:", userId);
 
-  db.query("SELECT id, username AS name, email FROM users WHERE id = ?", [userId], (err, userRows) => {
-    if (err || !userRows || userRows.length === 0) return res.status(404).json({ error: "User not found" });
-
-    const user = userRows[0];
+  db.get("SELECT id, username AS name, email FROM users WHERE id = ?", [userId], (err, user) => {
+    if (err || !user) return res.status(404).json({ error: "User not found" });
 
     // Check progress table for enrolled courses
-    db.query("SELECT DISTINCT course_id FROM progress WHERE user_id = ?", [userId], (errP, progressRows) => {
+    db.all("SELECT DISTINCT course_id FROM progress WHERE user_id = ?", [userId], (errP, progressRows) => {
       console.log("PROGRESS for user", userId, ":", progressRows ? progressRows.length : 0, "rows");
 
       const courseIds = progressRows ? progressRows.map(r => r.course_id) : [];
@@ -313,29 +371,32 @@ app.get("/user/:id/details", (req, res) => {
         return res.json({ user: { id: user.id, name: user.name }, courses: [] });
       }
 
-      // Get course details with progress % (no JOIN — query progress directly)
-      db.query(
-        `SELECT 
-            c.id AS course_id,
-            c.title,
-            c.category,
-            COALESCE(
-              LEAST(ROUND(
-                (SELECT COUNT(DISTINCT p.lesson_id) FROM progress p WHERE p.user_id = ? AND p.course_id = c.id AND p.completed = 1) /
-                NULLIF((SELECT COUNT(*) FROM lessons l WHERE l.course_id = c.id), 0) * 100
-              ), 100), 0
-            ) AS progress
-          FROM courses c
-          WHERE c.id IN (?)`,
-        [userId, courseIds],
-        (err2, courseRows) => {
-          if (err2) {
-            console.error("COURSE QUERY ERROR:", err2);
-            return res.status(500).json(err2);
-          }
-          res.json({ user: { id: user.id, name: user.name }, courses: courseRows || [] });
+      // Build dynamic placeholders for IN clause (SQLite doesn't auto-expand arrays)
+      const placeholders = courseIds.map(() => "?").join(",");
+
+      // Get course details with progress %
+      const sql = `
+        SELECT
+          c.id AS course_id,
+          c.title,
+          c.category,
+          COALESCE(
+            MIN(ROUND(
+              CAST((SELECT COUNT(DISTINCT p.lesson_id) FROM progress p WHERE p.user_id = ? AND p.course_id = c.id AND p.completed = 1) AS REAL) /
+              NULLIF((SELECT COUNT(*) FROM lessons l WHERE l.course_id = c.id), 0) * 100
+            ), 100), 0
+          ) AS progress
+        FROM courses c
+        WHERE c.id IN (${placeholders})
+      `;
+
+      db.all(sql, [userId, ...courseIds], (err2, courseRows) => {
+        if (err2) {
+          console.error("COURSE QUERY ERROR:", err2);
+          return res.status(500).json({ error: err2.message });
         }
-      );
+        res.json({ user: { id: user.id, name: user.name }, courses: courseRows || [] });
+      });
     });
   });
 });
@@ -351,9 +412,9 @@ app.get("/recommendations/:userId", (req, res) => {
     )
     LIMIT 6
   `;
-  db.query(sql, [userId], (err, result) => {
-    if (err) return res.status(500).json(err);
-    res.json(result);
+  db.all(sql, [userId], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
   });
 });
 
@@ -363,7 +424,7 @@ app.get("/ai-recommend/:userId", (req, res) => {
   const { userId } = req.params;
 
   // Step 1: Get ALL courses
-  db.query("SELECT id, title, description, category FROM courses", (err, allCourses) => {
+  db.all("SELECT id, title, description, category FROM courses", [], (err, allCourses) => {
     if (err || !allCourses || allCourses.length === 0) {
       return res.json([]);
     }
@@ -371,11 +432,11 @@ app.get("/ai-recommend/:userId", (req, res) => {
     console.log("USER ID RECEIVED:", userId);
 
     // Step 2: Get enrolled course IDs from PROGRESS table
-    db.query(
+    db.all(
       "SELECT DISTINCT course_id FROM progress WHERE user_id = ?",
       [userId],
-      (err, progressRows) => {
-        const enrolledIds = (!err && progressRows) ? progressRows.map(r => r.course_id) : [];
+      (err2, progressRows) => {
+        const enrolledIds = (!err2 && progressRows) ? progressRows.map(r => r.course_id) : [];
         console.log("ENROLLED IDS:", enrolledIds);
 
         // Step 3: Get categories from enrolled courses
@@ -390,12 +451,12 @@ app.get("/ai-recommend/:userId", (req, res) => {
         console.log("CATEGORIES:", categories);
 
         // Step 4: Get quiz score
-        db.query(
+        db.get(
           "SELECT AVG(score) as avg_score FROM quiz_result WHERE user_id = ?",
           [userId],
-          (err2, scoreRows) => {
-            const score = (!err2 && scoreRows && scoreRows[0]?.avg_score)
-              ? parseFloat(scoreRows[0].avg_score) : 5;
+          (err3, scoreRow) => {
+            const score = (!err3 && scoreRow && scoreRow.avg_score)
+              ? parseFloat(scoreRow.avg_score) : 5;
 
             // Step 5: Filter — exclude enrolled, match category, limit 3
             const unenrolled = allCourses.filter(c => !enrolledIds.includes(c.id));
@@ -418,17 +479,17 @@ app.get("/ai-recommend/:userId", (req, res) => {
             // Try ML service for better ranking, but use filtered result as guaranteed fallback
             const ML_URL = process.env.ML_SERVICE_URL || "http://localhost:5002";
             axios.get(`${ML_URL}/recommend?user_id=${userId}`)
-            .then(response => {
-            const aiResult = Array.isArray(response.data) ? response.data : [];
-            if (aiResult.length > 0) {
-            res.json(aiResult.slice(0, 3));
-            } else {
-            res.json(result);
-            }
-            })
-            .catch(() => {
-            res.json(result);
-            });
+              .then(response => {
+                const aiResult = Array.isArray(response.data) ? response.data : [];
+                if (aiResult.length > 0) {
+                  res.json(aiResult.slice(0, 3));
+                } else {
+                  res.json(result);
+                }
+              })
+              .catch(() => {
+                res.json(result);
+              });
           }
         );
       }
