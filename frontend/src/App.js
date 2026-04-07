@@ -115,7 +115,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
 
   // ✅ FETCH COURSES
   useEffect(() => {
-    fetch(API_URL + "/courses")
+    fetch(`${API_URL}/courses`)
       .then(res => res.json())
       .then(data => setCourses(data))
       .catch(err => console.error(err));
@@ -125,7 +125,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
   const handleAddCourse = () => {
     setLoading(true);
 
-    fetch(API_URL + "/add-course", {
+    fetch(`${API_URL}/add-course`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -142,7 +142,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
         setCategory("");
 
         // 🔥 REFRESH COURSES
-        fetch(API_URL + "/courses")
+        fetch(`${API_URL}/courses`)
           .then(res => res.json())
           .then(data => setCourses(data));
       });
@@ -174,7 +174,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
           </button>
 
           <button
-            onClick={() => { setActiveTab("users"); fetch(API_URL + "/users").then(r => r.json()).then(d => setAllUsers(d)); }}
+            onClick={() => { setActiveTab("users"); fetch(`${API_URL}/users`).then(r => r.json()).then(d => setAllUsers(d)); }}
             className={`flex items-center gap-3 w-full text-left px-4 py-3 rounded-xl font-medium transition-colors ${activeTab === "users" || activeTab === "userdetails" ? "bg-indigo-50 text-indigo-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
               }`}
           >
@@ -454,7 +454,7 @@ function CoursePage({ course, user, onBack, onTakeQuiz }) {
     if (progressData.some(p => p.lesson_id === lessonId && Number(p.completed) === 1)) return; // prevent duplicate call
 
     setMarking(true);
-    fetch(API_URL + "/progress", {
+    fetch(`${API_URL}/progress`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ user_id: user.id, course_id: course.id, lesson_id: lessonId }),
@@ -639,7 +639,7 @@ function QuizPage({ course, user, onBack }) {
       questionId: parseInt(questionId),
       selected,
     }));
-    fetch(API_URL + "/quiz/submit", {
+    fetch(`${API_URL}/quiz/submit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ userId: user.id, courseId: course.id, answers: payload }),
@@ -932,7 +932,7 @@ function UserDashboard({ user, onLogout }) {
   const [activeView, setActiveView] = useState("dashboard"); // dashboard | course | quiz | ai
 
   useEffect(() => {
-    fetch(API_URL + "/courses")
+    fetch(`${API_URL}/courses`)
       .then(res => res.json())
       .then(data => setCourses(data));
 

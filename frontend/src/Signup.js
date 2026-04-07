@@ -14,7 +14,7 @@ function Signup({ setUser }) {
     setError("");
     setLoading(true);
 
-    fetch(API_URL + "/register", {
+    fetch(`${API_URL}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, email, password, role }),
